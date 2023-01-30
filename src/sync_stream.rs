@@ -1,11 +1,13 @@
 use crate::compat::{input_absinfo, input_event};
+use crate::constants::*;
 use crate::device_state::DeviceState;
 use crate::ff::*;
 use crate::raw_stream::{FFEffect, RawDevice};
-use crate::{constants::*, EvdevEvent};
 use crate::{
-    AttributeSet, AttributeSetRef, AutoRepeat, InputEvent, InputEventKind, InputId, KeyType,
+    AbsInfo, AttributeSet, AttributeSetRef, AutoRepeat, EvdevEvent, InputEvent, InputEventKind,
+    InputId, KeyType,
 };
+use std::collections::HashMap;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::time::SystemTime;
@@ -275,6 +277,17 @@ impl Device {
     /// Retrieve the current absolute axis state directly via kernel syscall.
     pub fn get_abs_state(&self) -> io::Result<[input_absinfo; AbsoluteAxisType::COUNT]> {
         self.raw.get_abs_state()
+    }
+
+    /// Get the AbsInfo for each supported AbsoluteAxis
+    pub fn get_absinfo(&self) -> io::Result<HashMap<AbsoluteAxisType, AbsInfo>> {
+        let raw_absinfo = self.get_abs_state()?;
+        Ok(self
+            .supported_absolute_axes()
+            .unwrap_or(&AttributeSet::new())
+            .iter()
+            .map(|axis| (axis, AbsInfo(raw_absinfo[axis.0 as usize])))
+            .collect())
     }
 
     /// Retrieve the current switch state directly via kernel syscall.
