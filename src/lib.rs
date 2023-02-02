@@ -525,10 +525,33 @@ impl_from_type!(MiscEvent, InputEvent::Misc);
 impl_from_type!(SwitchEvent, InputEvent::Switch);
 impl_from_type!(LedEvent, InputEvent::Led);
 impl_from_type!(SoundEvent, InputEvent::Sound);
+impl_from_type!(RepeatEvent, InputEvent::Repeat);
 impl_from_type!(FFEvent, InputEvent::ForceFeedback);
+impl_from_type!(PowerEvent, InputEvent::Power);
 impl_from_type!(FFStatusEvent, InputEvent::ForceFeedbackStatus);
 impl_from_type!(UInputEvent, InputEvent::UInput);
 impl_from_type!(OtherEvent, InputEvent::Other);
+
+impl From<InputEventMatcher> for InputEvent {
+    fn from(value: InputEventMatcher) -> Self {
+        match value {
+            InputEventMatcher::Synchronization(ev, _, _) => Self::from(ev),
+            InputEventMatcher::Key(ev, _, _) => Self::from(ev),
+            InputEventMatcher::RelativeAxis(ev, _, _) => Self::from(ev),
+            InputEventMatcher::AbsoluteAxis(ev, _, _) => Self::from(ev),
+            InputEventMatcher::Misc(ev, _, _) => Self::from(ev),
+            InputEventMatcher::Switch(ev, _, _) => Self::from(ev),
+            InputEventMatcher::Led(ev, _, _) => Self::from(ev),
+            InputEventMatcher::Sound(ev, _, _) => Self::from(ev),
+            InputEventMatcher::Repeat(ev, _, _) => Self::from(ev),
+            InputEventMatcher::ForceFeedback(ev, _, _) => Self::from(ev),
+            InputEventMatcher::Power(ev, _, _) => Self::from(ev),
+            InputEventMatcher::ForceFeedbackStatus(ev, _, _) => Self::from(ev),
+            InputEventMatcher::UInput(ev, _, _) => Self::from(ev),
+            InputEventMatcher::Other(ev, _, _) => Self::from(ev),
+        }
+    }
+}
 
 impl EvdevEvent for InputEvent {
     fn code(&self) -> u16 {
