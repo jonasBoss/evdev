@@ -1,9 +1,11 @@
 use crate::compat::{input_absinfo, input_event};
-use crate::constants::*;
 use crate::device_state::DeviceState;
 use crate::ff::*;
 use crate::raw_stream::{FFEffect, RawDevice};
-use crate::{AttributeSet, AttributeSetRef, AutoRepeat, InputEvent, InputEventKind, InputId, Key};
+use crate::{constants::*, EvdevEvent};
+use crate::{
+    AttributeSet, AttributeSetRef, AutoRepeat, InputEvent, InputEventKind, InputId, KeyType,
+};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::Path;
 use std::time::SystemTime;
@@ -98,7 +100,7 @@ impl Device {
     }
 
     /// Retrieve the scancode for a keycode, if any
-    pub fn get_scancode_by_keycode(&self, keycode: Key) -> io::Result<Vec<u8>> {
+    pub fn get_scancode_by_keycode(&self, keycode: KeyType) -> io::Result<Vec<u8>> {
         self.raw.get_scancode_by_keycode(keycode.code() as u32)
     }
 
@@ -108,17 +110,17 @@ impl Device {
     }
 
     /// Update a scancode. The return value is the previous keycode
-    pub fn update_scancode(&self, keycode: Key, scancode: &[u8]) -> io::Result<Key> {
+    pub fn update_scancode(&self, keycode: KeyType, scancode: &[u8]) -> io::Result<KeyType> {
         self.raw
             .update_scancode(keycode.code() as u32, scancode)
-            .map(|keycode| Key::new(keycode as u16))
+            .map(|keycode| KeyType::new(keycode as u16))
     }
 
     /// Update a scancode by index. The return value is the previous keycode
     pub fn update_scancode_by_index(
         &self,
         index: u16,
-        keycode: Key,
+        keycode: KeyType,
         scancode: &[u8],
     ) -> io::Result<u32> {
         self.raw
@@ -135,7 +137,7 @@ impl Device {
         self.raw.driver_version()
     }
 
-    /// Returns a set of the event types supported by this device (Key, Switch, etc)
+    /// Returns a set of the event types supported by this device (KeyType, Switch, etc)
     ///
     /// If you're interested in the individual keys or switches supported, it's probably easier
     /// to just call the appropriate `supported_*` function instead.
@@ -152,15 +154,15 @@ impl Device {
     ///
     /// ```no_run
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use evdev::{Device, Key};
+    /// use evdev::{Device, KeyType};
     /// let device = Device::open("/dev/input/event0")?;
     ///
     /// // Does this device have an ENTER key?
-    /// let supported = device.supported_keys().map_or(false, |keys| keys.contains(Key::KEY_ENTER));
+    /// let supported = device.supported_keys().map_or(false, |keys| keys.contains(KeyType::KEY_ENTER));
     /// # Ok(())
     /// # }
     /// ```
-    pub fn supported_keys(&self) -> Option<&AttributeSetRef<Key>> {
+    pub fn supported_keys(&self) -> Option<&AttributeSetRef<KeyType>> {
         self.raw.supported_keys()
     }
 
@@ -266,7 +268,7 @@ impl Device {
     }
 
     /// Retrieve the current keypress state directly via kernel syscall.
-    pub fn get_key_state(&self) -> io::Result<AttributeSet<Key>> {
+    pub fn get_key_state(&self) -> io::Result<AttributeSet<KeyType>> {
         self.raw.get_key_state()
     }
 
@@ -308,9 +310,9 @@ impl Device {
             self.prev_state.clone_from(&self.state);
             let now = SystemTime::now();
             self.sync_state(now)?;
-            Some(SyncState::Keys {
+            Some(SyncState::KeyTypes {
                 time: crate::systime_to_timeval(&now),
-                start: Key::new(0),
+                start: KeyType::new(0),
             })
         } else {
             None
@@ -361,7 +363,7 @@ impl Device {
     /// [EventType::LED] (turn device LEDs on and off),
     /// [EventType::SOUND] (play a sound on the device)
     /// and [EventType::FORCEFEEDBACK] (play force feedback effects on the device, i.e. rumble).
-    pub fn send_events(&mut self, events: &[InputEvent]) -> io::Result<()> {
+    pub fn send_events<T: EvdevEvent>(&mut self, events: &[T]) -> io::Result<()> {
         self.raw.send_events(events)
     }
 
@@ -402,9 +404,9 @@ pub struct FetchEventsSynced<'a> {
 }
 
 enum SyncState {
-    Keys {
+    KeyTypes {
         time: libc::timeval,
-        start: Key,
+        start: KeyType,
     },
     Absolutes {
         time: libc::timeval,
@@ -439,7 +441,7 @@ fn compensate_events(state: &mut Option<SyncState>, dev: &mut Device) -> Option<
                     let value = get_value(vals, typ);
                     if prev != value {
                         $start.0 = typ.0 + 1;
-                        let ev = InputEvent(input_event {
+                        let ev = InputEvent::from(input_event {
                             time: *$time,
                             type_: EventType::$evtype.0,
                             code: typ.0,
@@ -454,14 +456,14 @@ fn compensate_events(state: &mut Option<SyncState>, dev: &mut Device) -> Option<
     loop {
         // check keys, then abs axes, then switches, then leds
         match sync {
-            SyncState::Keys { time, start } => {
+            SyncState::KeyTypes { time, start } => {
                 try_compensate!(
                     time,
-                    start: Key,
+                    start: KeyType,
                     KEY,
-                    Keys,
+                    KeyTypes,
                     supported_keys,
-                    &AttributeSetRef<Key>,
+                    &AttributeSetRef<KeyType>,
                     |st| st.key_vals().unwrap(),
                     |vals, key| vals.contains(key)
                 );
@@ -516,10 +518,10 @@ fn compensate_events(state: &mut Option<SyncState>, dev: &mut Device) -> Option<
                     |st| st.led_vals().unwrap(),
                     |vals, led| vals.contains(led)
                 );
-                let ev = InputEvent(input_event {
+                let ev = InputEvent::from(input_event {
                     time: *time,
                     type_: EventType::SYNCHRONIZATION.0,
-                    code: Synchronization::SYN_REPORT.0,
+                    code: SynchronizationType::SYN_REPORT.0,
                     value: 0,
                 });
                 *state = None;
@@ -546,7 +548,7 @@ impl<'a> Iterator for FetchEventsSynced<'a> {
             self.consumed_to = end
         }
         match res {
-            Ok(ev) => Some(InputEvent(ev)),
+            Ok(ev) => Some(InputEvent::from(ev)),
             Err(requires_sync) => {
                 if requires_sync {
                     self.dev.block_dropped = true;
@@ -580,12 +582,12 @@ fn sync_events(
         let block_start = range.end;
         let mut block_dropped = false;
         for (i, ev) in event_buf.iter().enumerate().skip(block_start) {
-            let ev = InputEvent(*ev);
+            let ev = InputEvent::from(*ev);
             match ev.kind() {
-                InputEventKind::Synchronization(Synchronization::SYN_DROPPED) => {
+                InputEventKind::Synchronization(SynchronizationType::SYN_DROPPED) => {
                     block_dropped = true;
                 }
-                InputEventKind::Synchronization(Synchronization::SYN_REPORT) => {
+                InputEventKind::Synchronization(SynchronizationType::SYN_REPORT) => {
                     consumed_to = Some(i + 1);
                     if block_dropped {
                         *range = event_buf.len()..event_buf.len();
@@ -626,7 +628,7 @@ impl fmt::Display for Device {
         if let (Some(supported_keys), Some(key_vals)) =
             (self.supported_keys(), self.state.key_vals())
         {
-            writeln!(f, "  Keys supported:")?;
+            writeln!(f, "  KeyTypes supported:")?;
             for key in supported_keys.iter() {
                 let key_idx = key.code() as usize;
                 writeln!(
@@ -794,7 +796,7 @@ mod tokio_stream {
                     self.consumed_to = end
                 }
                 match res {
-                    Ok(ev) => return Poll::Ready(Ok(InputEvent(ev))),
+                    Ok(ev) => return Poll::Ready(Ok(InputEvent::from(ev))),
                     Err(requires_sync) => {
                         if requires_sync {
                             dev.block_dropped = true;
@@ -861,17 +863,17 @@ mod tests {
     const KEY4: input_event = input_event {
         time,
         type_: EventType::KEY.0,
-        code: Key::KEY_4.0,
+        code: KeyType::KEY_4.0,
         value: 1,
     };
     const REPORT: input_event = input_event {
         time,
         type_: EventType::SYNCHRONIZATION.0,
-        code: Synchronization::SYN_REPORT.0,
+        code: SynchronizationType::SYN_REPORT.0,
         value: 0,
     };
     const DROPPED: input_event = input_event {
-        code: Synchronization::SYN_DROPPED.0,
+        code: SynchronizationType::SYN_DROPPED.0,
         ..REPORT
     };
 

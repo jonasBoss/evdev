@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::{io, mem};
 
 use crate::compat::{input_absinfo, input_event, input_id, input_keymap_entry};
-use crate::constants::*;
 use crate::ff::*;
-use crate::{sys, AttributeSet, AttributeSetRef, FFEffectType, InputEvent, InputId, Key};
+use crate::{constants::*, EvdevEvent, FFEvent};
+use crate::{sys, AttributeSet, AttributeSetRef, FFEffectType, InputEvent, InputId, KeyType};
 
 fn ioctl_get_cstring(
     f: unsafe fn(RawFd, &mut [u8]) -> nix::Result<libc::c_int>,
@@ -65,7 +65,7 @@ impl FFEffect {
     /// Plays the force feedback effect with the `count` argument specifying how often the effect
     /// should be played.
     pub fn play(&mut self, count: i32) -> io::Result<()> {
-        let events = [InputEvent::new(EventType::FORCEFEEDBACK, self.id, count)];
+        let events = [FFEvent::new(self.id, count)];
         let bytes = unsafe { crate::cast_to_bytes(&events) };
         self.file.write_all(bytes)?;
 
@@ -74,7 +74,7 @@ impl FFEffect {
 
     /// Stops playback of the force feedback effect.
     pub fn stop(&mut self) -> io::Result<()> {
-        let events = [InputEvent::new(EventType::FORCEFEEDBACK, self.id, 0)];
+        let events = [FFEvent::new(self.id, 0)];
         let bytes = unsafe { crate::cast_to_bytes(&events) };
         self.file.write_all(bytes)?;
 
@@ -113,7 +113,7 @@ pub struct RawDevice {
     id: input_id,
     props: AttributeSet<PropType>,
     driver_version: (u8, u8, u8),
-    supported_keys: Option<AttributeSet<Key>>,
+    supported_keys: Option<AttributeSet<KeyType>>,
     supported_relative: Option<AttributeSet<RelativeAxisType>>,
     supported_absolute: Option<AttributeSet<AbsoluteAxisType>>,
     supported_switch: Option<AttributeSet<SwitchType>>,
@@ -190,7 +190,7 @@ impl RawDevice {
         }; // FIXME: handle old kernel
 
         let supported_keys = if ty.contains(EventType::KEY) {
-            let mut keys = AttributeSet::<Key>::new();
+            let mut keys = AttributeSet::<KeyType>::new();
             unsafe { sys::eviocgbit_key(file.as_raw_fd(), keys.as_mut_raw_slice())? };
             Some(keys)
         } else {
@@ -355,15 +355,15 @@ impl RawDevice {
     ///
     /// ```no_run
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use evdev::{Device, Key};
+    /// use evdev::{Device, KeyType};
     /// let device = Device::open("/dev/input/event0")?;
     ///
     /// // Does this device have an ENTER key?
-    /// let supported = device.supported_keys().map_or(false, |keys| keys.contains(Key::KEY_ENTER));
+    /// let supported = device.supported_keys().map_or(false, |keys| keys.contains(KeyType::KEY_ENTER));
     /// # Ok(())
     /// # }
     /// ```
-    pub fn supported_keys(&self) -> Option<&AttributeSetRef<Key>> {
+    pub fn supported_keys(&self) -> Option<&AttributeSetRef<KeyType>> {
         self.supported_keys.as_deref()
     }
 
@@ -498,12 +498,12 @@ impl RawDevice {
     /// this in a tight loop within a thread.
     pub fn fetch_events(&mut self) -> io::Result<impl Iterator<Item = InputEvent> + '_> {
         self.fill_events()?;
-        Ok(self.event_buf.drain(..).map(InputEvent))
+        Ok(self.event_buf.drain(..).map(InputEvent::from))
     }
 
     /// Retrieve the current keypress state directly via kernel syscall.
     #[inline]
-    pub fn get_key_state(&self) -> io::Result<AttributeSet<Key>> {
+    pub fn get_key_state(&self) -> io::Result<AttributeSet<KeyType>> {
         let mut key_vals = AttributeSet::new();
         self.update_key_state(&mut key_vals)?;
         Ok(key_vals)
@@ -537,7 +537,7 @@ impl RawDevice {
     /// If you don't already have a buffer, you probably want
     /// [`get_key_state`](Self::get_key_state) instead.
     #[inline]
-    pub fn update_key_state(&self, key_vals: &mut AttributeSet<Key>) -> io::Result<()> {
+    pub fn update_key_state(&self, key_vals: &mut AttributeSet<KeyType>) -> io::Result<()> {
         unsafe { sys::eviocgkey(self.as_raw_fd(), key_vals.as_mut_raw_slice())? };
         Ok(())
     }
@@ -703,8 +703,12 @@ impl RawDevice {
     /// [EventType::LED] (turn device LEDs on and off),
     /// [EventType::SOUND] (play a sound on the device)
     /// and [EventType::FORCEFEEDBACK] (play force feedback effects on the device, i.e. rumble).
-    pub fn send_events(&mut self, events: &[InputEvent]) -> io::Result<()> {
-        let bytes = unsafe { crate::cast_to_bytes(events) };
+    pub fn send_events<T: EvdevEvent>(&mut self, events: &[T]) -> io::Result<()> {
+        let raw: &[input_event] = &events
+            .iter()
+            .map(|e| *e.as_ref())
+            .collect::<Vec<input_event>>();
+        let bytes = unsafe { crate::cast_to_bytes(raw) };
         self.file.write_all(bytes)
     }
 
@@ -724,11 +728,7 @@ impl RawDevice {
     /// Sets the force feedback gain, i.e. how strong the force feedback effects should be for the
     /// device. A gain of 0 means no gain, whereas `u16::MAX` is the maximum gain.
     pub fn set_ff_gain(&mut self, value: u16) -> io::Result<()> {
-        let events = [InputEvent::new(
-            EventType::FORCEFEEDBACK,
-            FFEffectType::FF_GAIN.0,
-            value.into(),
-        )];
+        let events = [FFEvent::new(FFEffectType::FF_GAIN.0, value.into())];
         let bytes = unsafe { crate::cast_to_bytes(&events) };
         self.file.write_all(bytes)?;
 
@@ -737,11 +737,7 @@ impl RawDevice {
 
     /// Enables or disables autocenter for the force feedback device.
     pub fn set_ff_autocenter(&mut self, value: u16) -> io::Result<()> {
-        let events = [InputEvent::new(
-            EventType::FORCEFEEDBACK,
-            FFEffectType::FF_AUTOCENTER.0,
-            value.into(),
-        )];
+        let events = [FFEvent::new(FFEffectType::FF_AUTOCENTER.0, value.into())];
         let bytes = unsafe { crate::cast_to_bytes(&events) };
         self.file.write_all(bytes)?;
 
@@ -851,7 +847,7 @@ mod tokio_stream {
             'outer: loop {
                 if let Some(&ev) = self.device.get_ref().event_buf.get(self.index) {
                     self.index += 1;
-                    return Poll::Ready(Ok(InputEvent(ev)));
+                    return Poll::Ready(Ok(InputEvent::from(ev)));
                 }
 
                 self.device.get_mut().event_buf.clear();
