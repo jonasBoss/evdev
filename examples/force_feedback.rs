@@ -6,7 +6,7 @@ mod _pick_device;
 
 fn main() -> std::io::Result<()> {
     let mut d = _pick_device::pick_device();
-    println!("{}", d);
+    println!("{d}");
     println!("It's time to rumble!");
 
     let effect_data = FFEffectData {
@@ -32,10 +32,10 @@ fn main() -> std::io::Result<()> {
             for ev in d.fetch_events().unwrap() {
                 match ev.matcher() {
                     InputEventMatcher::ForceFeedback(_, FFType(id), STARTED) => {
-                        println!("Device Started effect id {}", id);
+                        println!("Device Started effect id {id}");
                     }
                     InputEventMatcher::ForceFeedback(_, FFType(id), STOPPED) => {
-                        println!("Device Stopped effect id {}", id);
+                        println!("Device Stopped effect id {id}");
                     }
                     _ => (),
                 }
